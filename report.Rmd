@@ -1,0 +1,451 @@
+---
+title: "TED Talks"
+author: "Angela Zhai"
+date: "December 9, 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+pacman::p_load("tidyverse", "lubridate", "tm", "RColorBrewer", "jcolors", "wordcloud", "tidytext", "lme4", "gridExtra", "rmcorr", "car", "arm", "ggfortify", "knitr", "kableExtra")
+```
+
+#I. Abstract
+
+TED.com has a bunch of free and compelling videos. Most of them compress speakers' years of research into 18 minutes story-telling talks. Those videos attract many people to watch and learn. However, why, some videos are more popular than others.
+
+By conducting EDA and varying intercepts mixed effect model, the overall trend has shown. With more subtitle languages choice, more audiences who speak different languages could have the chance to get the speaker's ideas. Also, if there are lots of people willing to share their opinions under a video, usually more people will watch this video and join the discussion. More importantly, the talks should not be too short.
+
+
+#II. Background
+
+TED is a non-profit organization offered conference and free online short videos to a global audience. They began in 1984 and focused on Technology, Entertainment, and Design. Nowadays, they cover more topics and allow free licenses to local organizers who wished to organize their own TED-like events.
+
+TED started to post the talk videos from 2006 under their slogan "Ideas worth spreading," and they found out this is a better way to let more people hear the speaker's voice. Until September 2017, they have 2550 videos on their website (https://www.ted.com/). The videos are translated into different languages by volunteers.
+
+```{r echo=FALSE, message=FALSE}
+##data cleaning
+main <- read_csv("ted_main.csv")
+transcripts <- read_csv("transcripts.csv")
+
+##transform film date format
+main$film_date <- as.Date(as.POSIXct(main$film_date, origin="1970-01-01", tz="UTC"), "%m/%d/%Y", tz="UTC")
+main$published_date <- as.Date(as.POSIXct(main$published_date, origin="1970-01-01", tz="UTC"), "%m/%d/%Y", tz="UTC")
+##get filmed year of the videos
+main$year <- format(as.Date(main$film_date, format="%d/%m/%Y"),"%Y")
+main$pyear <- format(as.Date(main$published_date, format="%d/%m/%Y"),"%Y")
+main <- main %>%
+  mutate(duration_min = round(duration/60, 2),
+         views_log = log(views),
+         comments_log = log(comments), comments_round = round(comments_log, 0),
+         year_num = as.numeric(year),
+         pyear_num = as.numeric(pyear),
+         tags_num = str_count(tags, pattern = ",")+1)
+
+##filter out non-TED videos and TED Dialogues, which are not typical TED talks
+duration <- main %>%
+  filter(str_detect(event, pattern = "TED") & !event=="TED Dialogues") 
+
+##TAGS. Make tags as level predictor, pick most popular tags as the only tag for each video
+tags <- duration %>%
+  mutate(tags = strsplit(tags, ", ")) %>% 
+  unnest(tags) %>%
+  mutate(tags = str_replace_all(tags, "[\\[\\]']", "")) 
+tags_plot <- tags %>%
+  group_by(tags) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count))
+tags_plot$rank <- 1:nrow(tags_plot)
+tags <- left_join(tags, tags_plot, by="tags") 
+tags_keep <- tags %>%
+  group_by(title) %>%
+  summarise(min(rank))
+duration <- inner_join(tags, tags_keep, by=c("title", "rank"="min(rank)"))
+duration <- duration %>%
+  mutate(rank_year = pyear_num-2005)
+```
+
+```{r echo=FALSE, fig.align='center', out.width = '80%'}
+##how many videos in each year
+ggplot(data=main, mapping=aes(x=pyear)) +
+  geom_bar(fill="firebrick3") +
+  labs(x="Year", y="Number of Videos") +
+  coord_flip() +
+  ggtitle("Fig 1. Number of Videos Published in Each Year") +
+  theme(panel.background = element_rect(fill = "white", colour = "grey50"),
+        plot.title = element_text(size = 10), axis.title = element_text(size = 10))
+```
+
+"It used to be 800 people getting together once a year; now it's about a million people a day watching TED Talks online". The number of viewers per day is impressive. I would like to figure out what makes those videos popular and why some videos are more popular than others.
+
+
+#III. Method
+
+
+##1. Data source
+
+The data was scraped from TED official Website by Rounak Banik and uploaded to Kaggle (https://www.kaggle.com/rounakbanik/ted-talks). It contains information for all videos on TED.com until September 21st, 2017.
+
+TED.com not only contains TED Talks videos but also has a bunch of videos under "Best of the Web" and "TED Dialogue." Since the project only focused on TED Talks popularity, other videos are filtered out from the dataset and get 2437 videos in total.
+
+TED started to offer free online videos since June 2006 and received positive responses, which let them decide to make an official website for people to watch TED videos online. There are only a few videos filmed and published before 2006. But now, 5-7 new talks will be published every week. 
+
+```{r echo=FALSE, fig.align='center', fig.height=5}
+p1 <- ggplot(data=duration, mapping=aes(x=views_log, y=..density..)) +
+  geom_histogram(color="black", fill="white", binwidth=.5) +
+  geom_density(color = "firebrick3") +
+  labs(x="Number of Views on Log Scale", y="Frequency") +
+  ggtitle("Fig 1.1. Histogram of Views (on log scale)") +
+  theme(panel.background = element_rect(fill = "white", colour = "grey50"),
+        plot.title = element_text(size = 8), axis.title = element_text(size = 8))
+p2 <- ggplot(data=duration, mapping=aes(x=comments_log, y=..density..)) +
+  geom_histogram(color="black", fill="white", binwidth=.5) +
+  geom_density(color = "firebrick3") +
+  labs(x="Number of Comments on Log Scale", y="Frequency") +
+  ggtitle("Fig 1.2. Histogram of Comments (log scale)") +
+  theme(panel.background = element_rect(fill = "white", colour = "grey50"),
+        plot.title = element_text(size = 8), axis.title = element_text(size = 8))
+p3 <- ggplot(data=duration, mapping=aes(x=languages, y=..density..)) +
+  geom_histogram(color="black", fill="white", binwidth=5) +
+  geom_density(color = "firebrick3") +
+  labs(x="Number of Subtitile Languages", y="Frequency") +
+  ggtitle("Fig 1.3. Histogram of Subtitle Languages") +
+  theme(panel.background = element_rect(fill = "white", colour = "grey50"),
+        plot.title = element_text(size = 8), axis.title = element_text(size = 8))
+p4 <- ggplot(data=duration, mapping=aes(x=duration_min, y=..density..)) +
+  geom_histogram(color="black", fill="white", binwidth=5) +
+  geom_density(color = "firebrick3") +
+  geom_vline(xintercept = 18, linetype="dashed", color = "firebrick3", size=1) +
+  labs(x="Duration (minutes)", y="Frequency") +
+  ggtitle("Fig 1.4. Histogram of Videos Duration (minutes)") +
+  theme(panel.background = element_rect(fill = "white", colour = "grey50"),
+        plot.title = element_text(size = 8), axis.title = element_text(size = 8))
+grid.arrange(p1, p2, p3, p4, ncol = 2)
+```
+Fig 1.1-1.3 show normal distribution pattern for the number of views and number of comments (both on log scale). The number of subtitle languages also follow normal distribution pattern.
+
+“18 minutes is long enough to be serious and short enough to hold people’s attention”. This is one of the reasons why TED is popular since audiences could take only a piece of time to watch the videos. Fig 1.4 shows most videos are less than 18 minutes.
+
+
+```{r echo=FALSE, fig.align='center', fig.height=5}
+##highlight more than 1000 comments
+p5 <- ggplot() +
+  geom_jitter(data=subset(duration, comments<=1000), mapping=aes(x=views_log, y=comments_log), color="gray") +
+  geom_point(data=subset(duration, comments>1000), mapping=aes(x=views_log, y=comments_log, color=name), size=2) +
+  stat_smooth(data=duration, mapping=aes(x=views_log, y=comments_log), method = "lm", color="firebrick3") +
+  guides(color=FALSE) +
+  labs(x="Number of Views on Log Scale", y="Number of Comments on Log Scale") +
+  ggtitle("Fig 2.1. Relationship between Number of \nViews and Comments (both on log scale)") +
+  theme(panel.background = element_rect(fill = "white", colour = "grey50"),
+        plot.title = element_text(size = 8), axis.title = element_text(size = 8))
+p6 <- ggplot() +
+  geom_jitter(data=subset(duration, comments<=1000), mapping=aes(x=languages, y=comments_log), color="gray") +
+  geom_point(data=subset(duration, comments>1000), mapping=aes(x=languages, y=comments_log, color=name), size=2) +
+  stat_smooth(data=duration, mapping=aes(x=languages, y=comments_log), method = "lm", color="firebrick3") +
+  guides(color=FALSE) +
+  labs(x="Number of Languages", x="Number of Comments on Log Scale") +
+  ggtitle("Fig 2.2. Relationship between Number of \nLanguages and Comments (on log scale)") +
+  theme(panel.background = element_rect(fill = "white", colour = "grey50"),
+        plot.title = element_text(size = 8), axis.title = element_text(size = 8))
+p7 <- ggplot() +
+  geom_jitter(data=subset(duration, views<15000000), mapping=aes(x=duration_min, y=views_log), color="gray") +
+  geom_jitter(data=subset(duration, views>=15000000), mapping=aes(x=duration_min, y=views_log, color=name), size=2) +
+  geom_vline(xintercept = 18, linetype="dashed", color="firebrick3", size=.8) +
+  stat_smooth(data=duration, mapping=aes(x=duration_min, y=views_log), method = "lm", color="firebrick3") +
+  guides(color=FALSE) +
+  ggtitle("Fig 2.3. Relationship between Videos Duration \nand Number of Views (on log scale)") +
+  labs(x="Duration (minutes)", y="Number of Views") +
+  theme(panel.background = element_rect(fill = "white", colour = "grey50"),
+        plot.title = element_text(size = 8), axis.title = element_text(size = 8))
+p8 <- ggplot() +
+  geom_jitter(data=subset(duration, views<15000000), mapping=aes(x=languages, y=views_log), color="gray") +
+  geom_jitter(data=subset(duration, views>=15000000), mapping=aes(x=languages, y=views_log, color=name), size=2) +
+  stat_smooth(data=duration, mapping=aes(x=languages, y=views_log), method = "lm", color="firebrick3") +
+  guides(color=FALSE) +
+  ggtitle("Fig 2.4. Relationship between Number of Languages \nand Number of Views (on log scale)") +
+  labs(x="Number of Languages", y="Number of Views") +
+  theme(panel.background = element_rect(fill = "white", colour = "grey50"),
+        plot.title = element_text(size = 8), axis.title = element_text(size = 8))
+grid.arrange(p5, p6, p7, p8, ncol = 2)
+```
+Fig 2.1 shows the relationship between the number of views and number of comments (both on log scale). Colored points in Fig 2.1-2.2 are videos with more than 1000 comments, and only 31 videos have that much comments. Obviously and naturally, the number of views has a positive relationship with the number of comments. Subtitle languages is also an essential factor for a video to become popular, since more people could understand the ideas and tend to discuss their own opinions.
+
+The vertical dashed red line in Fig 2.3 is 18 minutes, which is TED's golden time for a speech. Colored points in Fig 2.3-2.4 are most viewed videos (viewed more than 15 million times). Those 18 videos all take around 20 minutes or less to finish, and they have translated into many languages.
+
+
+##2. Model used
+
+The models used for this data are linear regression model and multilevel model. 
+
+Predictors are the number of languages translated, number of comments on log scale, duration in minutes, and the year published. Outcome is the number of views on log scale.
+
+For multilevel model, each video has a tag which is one of the tags for this video and also the most frequent tagged label through all of the videos. Those videos are grouped by tags.
+
+Fig 4 shows the result of correlation coefficient for each tag, and there are differences among different tags.
+
+```{r echo=FALSE, fig.align='center', out.width = '80%'}
+cor <- rmcorr(factor(tags), pyear_num, log(views), dataset = duration)
+plot(cor, overall = F, lwd=2, main="Fig 3. Linear Regression group by Tags",
+     xlab="Year", ylab="Number of Views (on log scale)", cex.lab=1, cex.main=1, font.main=1)
+```
+
+
+
+#IV. Result
+
+##1. Model choice
+
+After comparing different models from no pooling to complete pooling, the model I choose is varying intercepts mixed effect model. The group-level standard deviation is not too big, and the model is close to complete pooling.
+
+Predictors are languages(number of subtitle languages), comments_log(number of comments on log scale), duration_min(videos duration in minutes), pyear_num(published year). Outcome is views_log(number of views on log scale).
+
+From Fig 2.2 we can tell that interaction between the number of subtitle languages and number of comments should also treat as a predictor.
+
+Group videos into different tags. Published years are ranked from 1 to 12 (2006-2017).
+```{r echo=FALSE}
+regout = lmer(views_log ~ languages*comments_log + duration_min + factor(pyear_num) + (1 | tags), duration)
+display(regout)
+```
+
+
+##2. Interpretation
+
+The model is fit to 2437 videos within 66 tags.
+
+The estimated regression line for an average tag is:
+
+$log(views) = 12.15 - 0.01*languages + 0.06*log(comments) + 0.02*duration + 0.02*year(2007) - 0.06*year(2008) - 0.29*year(2009) - 0.27*year(2010) - 0.53*year(2011) - 0.48*year(2012) - 0.21*year(2013) - 0.07*year(2014) + 0.25*year(2015) + 0.41*year(2016) + 0.52*year(2017) + 0.01*languages*log(comments)$
+
+which means on average, with one more language translated for the video, log(number of views) will increase 0.01$*$(log(number of comments)-1);
+
+If log(number of comments) increase one unit, log(views) will increase (0.06+0.01$*$languages);
+
+If the duration of the video last one more minute, log(number of views) will increase 0.02;
+
+Videos published in different years have different average views, such as if the video was published in 2017, log(number of views) will be 0.52 more than the video which was published in 2006.
+
+Table 1. (Intercept) by each tags
+
+```{r echo=FALSE}
+ranefct <- as.data.frame(ranef(regout))
+names(ranefct)[3] <- "Tags"
+names(ranefct)[4] <- "(Intercept)"
+kable(ranefct[1:10, 3:4]) %>% 
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "left") %>%
+  row_spec(0, bold=TRUE)
+```
+Table 1 shows 10 tags' (Intercept) as an example, the complete table is listed in appendix. 
+
+These values indicate how much the intercept is shifted up or down for particular tags. For example, videos which tagged as "activism", the estimated intercept is 0.08 lower than average, so that the intercept value for the regression line is 12.15-0.08 = 12.07.
+
+
+##3. Model checking
+```{r echo=FALSE, out.width='.49\\linewidth', fig.height=5, fig.show='hold', fig.align='center'}
+plot(fitted(regout), resid(regout, type="pearson"), pch=20, main="Fig 4. Fitted vs Residual", xlab="Fitted Value", cex.lab=1, cex.main=1, font.main=1) #check the constant standard deviation
+abline(h=0, col="firebrick3", lwd=2)
+qqnorm(resid(regout), cex.lab=1, cex.main=1, font.main=1)
+qqline(resid(regout), col="firebrick3", lwd=2) 
+```
+From Fig 4, we can see that the points are pretty symmetrically distributed, tending to cluster towards the middle of the plot. They are not far away from y=0, and in general, there aren’t clear patterns.
+
+From the Normal Q-Q Plot, residual values are generally followed normal distribution. Though the data still have some extreme values.
+
+
+
+#V. Discussion
+
+
+##1. Implication
+
+A popular TED video should have the following characteristics: already translated into many languages, many people left comments and discussed their opinions, and the duration of the video should not be too short.
+
+Videos published in 2014-2017 are more popular than previous couple of years. It could because these topics are up to the minute. When scrolling through the newest videos, there are "Google Street View cars," "Me Too movement," "man-made DNA," etc. Those topics are definitely what most people care about.
+
+From the ordered coefficient table (attached in Appendix), we can see that the videos which tagged as "entertainment" is the most popular category based on an average number of views. However, this tag contains a wide range of topics and speakers.
+
+
+##2. Limitation
+
+The tags used to group videos is not so accurate, and some information missed when transforming the tags.
+
+There is no data about comments content; however that is another question I am interested. I am curious about what the videos talked about and what the audiences discussed about. Whether most audiences agree with the speaker or they have different opinions.
+
+
+##3. Future direction
+
+I would like to scrap more data from TED.com by myself and try to get comments data. Use LDA (Latent Dirichlet allocation) and NLP (Natural Language Processing) methods to explore more from the talks and comments.
+
+
+#VI. Acknowledgement
+
+I would like to express my very great appreciation to Masanao for his valuable suggestion about how to build the multilevel model. This project cannot be finished without his help.
+
+I also grateful for my friends who always supportive and generous. They gave me a lot of strength and care.
+
+
+#VII. Reference
+
+Eldor, T. (2018, January 27). Data Reveals: What Makes a Ted Talk Popular? – Towards Data Science. Retrieved from https://towardsdatascience.com/data-reveals-what-makes-a-ted-talk-popular-6bc15540b995
+
+Banik, R. (n.d.). The World of TED. Retrieved from https://www.kaggle.com/rounakbanik/ted-data-analysis
+
+Fidelman, M. (2012, June 19). Here's Why TED and TEDx are So Incredibly Appealing (infographic). Retrieved from https://www.forbes.com/sites/markfidelman/2012/06/19/heres-why-ted-and-tedx-are-so-incredibly-appealing-infographic/#6a1581833b0e
+
+Chaudhari, U. (2017, Nov 22). Why should one watch a TED talk?. Retrieved from https://www.quora.com/Why-should-one-watch-a-TED-talk
+
+TED Speaker: Chris Anderson. (n.d.). Retrieved from https://www.ted.com/speakers/chris_anderson_ted
+
+OLSEN, H. B. (2016, August 31). How TED Inspired a Whole Generation of Public Speakers. Retrieved from https://www.creativelive.com/blog/rise-of-ted-talks/
+
+TED (conference). (2018, December 04). Retrieved from https://en.wikipedia.org/wiki/TED_(conference)
+
+
+#VIII. Appendix
+```{r echo=FALSE, fig.align='center', out.width = '80%'}
+ggplot(data=subset(duration, comments<1000),
+       mapping=aes(x = comments, color = pyear)) +
+  geom_density(position="identity", fill = NA, size = 1) +
+  scale_y_continuous(name = "Density") +
+  scale_colour_brewer(palette="Paired") +
+  ggtitle("Fig 5. Density Distribution for Number of Comments by Year") +
+  labs(x="Number of Comments", subtitle="Only focused on number of comments less than 1000 videos") +
+  theme(panel.background = element_rect(fill = "white", colour = "grey50"),
+        plot.title = element_text(size = 10), axis.title = element_text(size = 10),
+        plot.subtitle = element_text(size = 9))
+```
+Naturally, it takes time for more audiences to comment on and discuss their opinions. As Fig 3 shows that the density curve of 2017 is different from the density curve of 2011. In general, the videos which published earlier could get more comments.
+
+$~$
+
+```{r echo=FALSE, fig.align='center', out.width = '80%', error=FALSE, warning=FALSE}
+duration$high_rating <- NA
+for (i in 1:nrow(duration)){
+  count <- as.data.frame(str_match_all(str_match_all(duration[i,11], pattern = "'count': \\d+"), pattern = "\\d+"))
+  count <- as.numeric(levels(count[,1]))[count[,1]]
+  max <- max(count)
+  pattern <- paste0("\\{'id': \\d+, 'name': '[-a-zA-Z]+', 'count': ", max, "\\}")
+  ratings <- str_replace(substring(str_match(str_match(duration[i,11], pattern = pattern),
+                                             pattern = "'name': '[-a-zA-Z]+'"), 10), "'", "")
+  duration[i,"high_rating"] <- ratings
+}
+ggplot(data=duration, mapping=aes(x=reorder(high_rating, table(high_rating)[high_rating]))) +
+  geom_bar() +
+  coord_flip() +
+  ggtitle("Fig 6. Videos Rating Counts") +
+  labs(y="Count", x="Ratings") +
+  theme(panel.background = element_rect(fill = "white", colour = "grey50"),
+        plot.title = element_text(size = 10), axis.title = element_text(size = 10),
+        plot.subtitle = element_text(size = 9))
+```
+Every video has multiple ratings and counts. Here we keep the most rated one for each video and find out most talks are inspiring to most audiences.
+
+The interesting thing is, I searched the videos which most rated is "Longwinded" and find out those videos are not long at all, except one of them. Duration of those videos is close to 18 minutes. By reading the comments, "Longwinded" is mainly because of the speaker's speaking ability, they focused on themselves or showed nervously.
+
+$~$
+
+```{r echo=FALSE, fig.align='center', out.width = '80%', fig.height=3}
+occupation <- duration %>%
+  mutate(speaker_occupation = replace(speaker_occupation,
+                                      speaker_occupation=="9/11 mothers", "911 mothers")) %>%
+  mutate(speaker_occupation = strsplit(speaker_occupation, "/ ")) %>% 
+  unnest(speaker_occupation) %>%
+  mutate(speaker_occupation = strsplit(speaker_occupation, ", ")) %>% 
+  unnest(speaker_occupation) %>%
+  mutate(speaker_occupation = strsplit(speaker_occupation, "; ")) %>% 
+  unnest(speaker_occupation) %>%
+  mutate(speaker_occupation = strsplit(speaker_occupation, "/")) %>% 
+  unnest(speaker_occupation) %>%
+  mutate(speaker_occupation = strsplit(speaker_occupation, " and ")) %>% 
+  unnest(speaker_occupation) %>%
+  mutate(speaker_occupation = strsplit(speaker_occupation, " \\+ ")) %>% 
+  unnest(speaker_occupation) %>%
+  mutate(speaker_occupation = str_to_title(speaker_occupation))
+occupation_filter <- occupation %>%
+  dplyr::select(speaker_occupation) %>%
+  group_by(speaker_occupation) %>%
+  summarise(times = n()) %>%
+  arrange(desc(times)) %>%
+  head(10)
+occupation <- inner_join(occupation, occupation_filter, by="speaker_occupation")
+ggplot(data=occupation, mapping=aes(x=reorder(speaker_occupation, times))) +
+  geom_bar() +
+  coord_flip() +
+  ggtitle("Fig 7. Most Occupation for Speakers") +
+  labs(y="Count", x="Occupations") +
+  theme(panel.background = element_rect(fill = "white", colour = "grey50"),
+        plot.title = element_text(size = 10), axis.title = element_text(size = 10),
+        plot.subtitle = element_text(size = 9))
+```
+The most frequent occupations are writers and artists. We can also see that many entrepreneurs gave the speak at TED, the reason could be a valuable way to push the company or project to the public. 
+
+$~$
+
+```{r echo=FALSE, fig.align='center', out.width = '80%', fig.height=3}
+tags <- duration %>%
+  mutate(tags = strsplit(tags, ", ")) %>% 
+  unnest(tags) %>%
+  mutate(tags = str_replace_all(tags, "[\\[\\]']", "")) 
+tags_plot <- tags %>%
+  group_by(tags) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count)) %>%
+  head(10)
+tags_plot$freq <- 1:nrow(tags_plot)
+tags <- inner_join(tags, tags_plot, by="tags") 
+tags_keep <- tags %>%
+  group_by(title) %>%
+  summarise(min(freq))
+tags <- inner_join(tags, tags_keep, by=c("title", "freq"="min(freq)"))
+tags_plot <- inner_join(tags, tags_plot, by="tags")
+ggplot(data=tags_plot, mapping=aes(x=reorder(tags, count))) +
+  geom_bar() +
+  coord_flip() +
+  ggtitle("Fig 8. Most Tags for Videos") +
+  labs(y="Count", x="Tags") +
+  theme(panel.background = element_rect(fill = "white", colour = "grey50"),
+        plot.title = element_text(size = 10), axis.title = element_text(size = 10),
+        plot.subtitle = element_text(size = 9))
+```
+"Technology" appeared most which is one of TED's main topic.
+
+In 2009 Chris introduced the TEDx initiative, allowing free licenses to local organizers who wished to organize their own TED-like events. More than 8,000 such events have been held, generating an archive of 60,000 TEDx talks.
+
+$~$
+
+**Fig 9. Wordcloud for Technology Transcript**
+```{r echo=FALSE, fig.align='center', out.width = '80%', warning=FALSE}
+technology <- left_join(transcripts, tags, by="url") %>%
+  filter(tags == "technology")
+transcript <- technology %>%
+  unnest_tokens(bigram, transcript, token = "ngrams", n = 2) %>%
+  separate(bigram, c("word1", "word2"), sep = " ") %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word) %>%
+  filter(!word1=="laughter") %>%
+  filter(!word2=="laughter") %>%
+  count(word1, word2, sort = TRUE) %>%
+  mutate(word = paste0(word1, " ", word2),
+         n = n/100)
+set.seed(2018)
+wordcloud(transcript$word, transcript$n, 
+          max.words = 30, 
+          colors = c("grey80", "darkgoldenrod1", "tomato"))
+```
+Pick the most frequent tag "Technology," and try to figure out what the speakers talked about.
+
+$~$
+
+$~$
+
+$~$
+
+Table 2. (Intercept) by tags
+```{r echo=FALSE}
+ranefct1 <- as.data.frame(ranef(regout))
+names(ranefct1)[3] <- "Tags"
+names(ranefct1)[4] <- "(Intercept)"
+ranefct1 <- arrange(ranefct1, desc(`(Intercept)`))
+kable(ranefct1[, 3:4], longtable=TRUE) %>% 
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "left") %>%
+  row_spec(0, bold=TRUE)
+```
