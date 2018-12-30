@@ -307,8 +307,9 @@ ggplot(data=subset(duration, comments<1000),
   geom_density(position="identity", fill = NA, size = 1) +
   scale_y_continuous(name = "Density") +
   scale_colour_brewer(palette="Paired") +
-  ggtitle("Fig 5. Density Distribution for Number of Comments by Year") +
+  ggtitle("Fig 5. Density Distribution for Number of Comments by Published Year") +
   labs(x="Number of Comments", subtitle="Only focused on number of comments less than 1000 videos") +
+  guides(color=guide_legend(title="Published Year")) +
   theme(panel.background = element_rect(fill = "white", colour = "grey50"),
         plot.title = element_text(size = 10), axis.title = element_text(size = 10),
         plot.subtitle = element_text(size = 9))
@@ -370,8 +371,8 @@ occupation <- inner_join(occupation, occupation_filter, by="speaker_occupation")
 ggplot(data=occupation, mapping=aes(x=reorder(speaker_occupation, times))) +
   geom_bar() +
   coord_flip() +
-  ggtitle("Fig 7. Most Occupation for Speakers") +
-  labs(y="Count", x="Occupations") +
+  ggtitle("Fig 7. Speakers' Occupation Count") +
+  labs(y="Count", x="Occupations", subtitle="Only focused on top 10 occupations") +
   theme(panel.background = element_rect(fill = "white", colour = "grey50"),
         plot.title = element_text(size = 10), axis.title = element_text(size = 10),
         plot.subtitle = element_text(size = 9))
@@ -400,8 +401,8 @@ tags_plot <- inner_join(tags, tags_plot, by="tags")
 ggplot(data=tags_plot, mapping=aes(x=reorder(tags, count))) +
   geom_bar() +
   coord_flip() +
-  ggtitle("Fig 8. Most Tags for Videos") +
-  labs(y="Count", x="Tags") +
+  ggtitle("Fig 8. Tags for Videos Count") +
+  labs(y="Count", x="Tags", subtitle="Only focused on top 10 tags") +
   theme(panel.background = element_rect(fill = "white", colour = "grey50"),
         plot.title = element_text(size = 10), axis.title = element_text(size = 10),
         plot.subtitle = element_text(size = 9))
@@ -425,13 +426,16 @@ transcript <- technology %>%
   filter(!word2=="laughter") %>%
   count(word1, word2, sort = TRUE) %>%
   mutate(word = paste0(word1, " ", word2),
-         n = n/100)
+         n = n/100) %>%
+  head(50)
 set.seed(2018)
-wordcloud(transcript$word, transcript$n, 
-          max.words = 30, 
-          colors = c("grey80", "darkgoldenrod1", "tomato"))
+wordcloud(transcript$word, transcript$n, scale = c(2,0.1), colors = brewer.pal(6, "Set2"), rot.per = 0)
 ```
 Pick the most frequent tag "Technology," and try to figure out what the speakers talked about.
+
+$~$
+
+$~$
 
 $~$
 
